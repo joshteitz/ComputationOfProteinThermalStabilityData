@@ -4,9 +4,17 @@ source(here("load_data.R"))
 source(here("ir_mc.R"))
 source(here("ir_eval.R"))
 
+### Introduction ##################################################################################
+# Code for the paper "Potential of dissimilarity measure-based computation of protein thermal
+# thermal stability data" by Teitz et al.
+# This code generates results for the following RESULTS subsections:
+# 1. Information retrieval of melting curves tends to rank interactors higher than non-interactors
+# 2. Quantifying the number of experiments necessary to find one protein-protein interaction and
+# all protein interactions
+# 3. IR-MC-ML tends to rank interactors higher than IR-MC.
 ###################################################################################################
-## Information retrieval of melting curves tends to rank interactors higher than non-interactors ##
-###################################################################################################
+
+## 1. Information retrieval of melting cuves tends to rank interactors higher than non-interactors
 
 # load BioPlex pull-down assay results
 pdata <- load_pulldown_results()
@@ -39,7 +47,7 @@ nrow(pdata) # number of remaining pull-down assays
 
 # Apply IR-MC to pull-down assays
 
-# Euclildean distance 
+# Euclidean distance 
 pb <- progress_bar$new(total = nrow(pdata))
 res_eucl <- pdata %>% mutate(Rk = map2(Bait, Prey, ~ {
   pb$tick();
@@ -118,9 +126,8 @@ ggplot(res_eucl, aes(x = IP)) +
     panel.grid.major.x = element_line(colour = "grey", size = 1)
   )
 
-###################################################################################################
-## Quantifying the number of experiments necessary to find one interactor and all interactors    ##
-###################################################################################################
+## 2. Quantifying the number of experiments necessary to find one protein-protein interaction and
+## all protein interactions
 
 # Standardize each pull-down assay to contain exactly five interactors and 45 non-interactors
 
@@ -129,7 +136,7 @@ pdata1 <- pdata %>%
   mutate(Non_ints = map2(Prey, Interactors, ~ .x[!(.x %in% .y)])) %>%
   mutate(Non_ints = map(Non_ints, ~ .x[.x %in% mdata$Protein]))
 
-# Remove any pull-down assay that does not contain > 5 interactors and > 45 non-interactors
+# Remove any pull-down assay that does not contain >= 5 interactors and >= 45 non-interactors
 pdata1 <- pdata1 %>%
   mutate(Num_ints = map_int(Interactors, length)) %>%
   mutate(Num_non_ints = map_int(Non_ints, length)) %>%
@@ -173,6 +180,14 @@ res_rand1 <- res_rand1 %>%
   mutate(Num_expts_all = map_int(Rk_interactors, ~ .x[5])) %>%
   select(-Rk_interactors)
 
+# Mean number of experiments needed to find one bait-prey interaction
+res_eucl1$Num_expts %>% mean
+res_rand1$Num_expts %>% mean
+
+# Mean number of experiments needed to find all bait-prey interactions
+res_eucl1$Num_expts_all %>% mean
+res_rand1$Num_expts_all %>% mean
+
 # Scatter plots of number of experiments needed to find one and all five interactors
 # for standardized pull-down assays
 
@@ -192,7 +207,6 @@ gg_color_hue <- function(n) {
   hues = seq(15, 375, length = n + 1)
   hcl(h = hues, l = 65, c = 100)[1:n]
 }
-
 
 # scatter plot
 ggplot(plot_data, aes(y = Category, x = Num_expts, color = Method)) +
@@ -215,34 +229,34 @@ ggplot(plot_data, aes(y = Category, x = Num_expts, color = Method)) +
     legend.position = "none"
   )
 
-###################################################################################################
-## IR-MC-ML tends to rank interactors higher than IR-MC                                          ##
-###################################################################################################
+## 3. IR-MC-ML tends to rank interactors higher than IR-MC
 
-# Remove pull-down assays with five or fewer interactors.
-pdata <- pdata %>%
+# Remove pull-down assays with five or fewer interactors, as such pull-down assays do not have
+# enough interactors to be suitable for IR-MC-ML
+pdata2 <- pdata %>%
   mutate(Num_ints = map_int(Interactors, length)) %>%
   filter(Num_ints > 5) %>%
   select(-Num_ints)
-nrow(pdata)
+nrow(pdata2)
 
 # Modify each pull-down assay by randomly sampling five prey proteins categorized as interactors
 # and extracting them. Store these extracted proteins in a column called `Known_ints`.
+# Remove 'Known_ints' from `Prey` so that they are not ranked.
 set.seed(28)
-pdata <- pdata %>%
+pdata2 <- pdata2 %>%
   mutate(Known_ints = map(Interactors, ~ sample(.x, 5))) %>%
   mutate(Interactors = map2(Interactors, Known_ints, ~ .x[!(.x %in% .y)])) %>%
   mutate(Prey = map2(Prey, Known_ints, ~ .x[!(.x %in% .y)]))
 
 # Apply IR-MC to each pull-down assay
-pb <- progress_bar$new(total = nrow(pdata))
-res_ir_mc <- pdata %>%
+pb <- progress_bar$new(total = nrow(pdata2))
+res_ir_mc <- pdata2 %>%
   mutate(Rk = map2(Bait, Prey, ~ {pb$tick(); ir_mc(d = "Eucl", query = .x, docs = .y, mdata)})) %>%
   select(Bait, Interactors, Rk)
 
 # Apply IR-MC-ML to each pull-down assay
-pb <- progress_bar$new(total = nrow(pdata))
-res_ir_mc_ml <- pdata %>%
+pb <- progress_bar$new(total = nrow(pdata2))
+res_ir_mc_ml <- pdata2 %>%
   mutate(Rk = pmap(list(Bait, Prey, Known_ints), ~ {
     pb$tick();
     ir_mc_ml(query = ..1, docs = ..2, mdata, known_ints = ..3)
@@ -250,34 +264,31 @@ res_ir_mc_ml <- pdata %>%
   select(Bait, Interactors, Rk)
 
 # Compute AP of each IR-MC ranking
-pb <- progress_bar$new(total = nrow(pdata))
+pb <- progress_bar$new(total = nrow(res_ir_mc))
 res_ir_mc <- res_ir_mc %>%
   mutate(AP = map2_dbl(Rk, Interactors, ~ {pb$tick(); avg_prec(.x, .y)}))
-
-# Compute IP of each IR-MC ranking
-pb <- progress_bar$new(total = nrow(pdata))
-res_ir_mc <- res_ir_mc %>%
-  mutate(IP = map2_dbl(Rk, Interactors, ~ {pb$tick(); improv_prob(.x, .y, 1000)}))
 
 # Compute AP of each IR-MC-ML ranking
-pb <- progress_bar$new(total = nrow(pdata))
+pb <- progress_bar$new(total = nrow(res_ir_mc_ml))
 res_ir_mc_ml <- res_ir_mc_ml %>%
   mutate(AP = map2_dbl(Rk, Interactors, ~ {pb$tick(); avg_prec(.x, .y)}))
 
-# Compute IP of each IR-MC-ML ranking
-pb <- progress_bar$new(total = nrow(pdata))
-res_ir_mc_ml <- res_ir_mc_ml %>%
-  mutate(IP = map2_dbl(Rk, Interactors, ~ {pb$tick(); improv_prob(.x, .y, 1000)}))
+# mAP of IR-MC and IR-MC-ML
+res_ir_mc$AP %>% mean
+res_ir_mc_ml$AP %>% mean
+
+# paired t-test comparing the AP values of IR-MC to those of IR-MC-ML
+t.test(x = res_ir_mc$AP, y = res_ir_mc_ml$AP, alternative = "two.sided", paired = T)
 
 # Standardize each pull-down assay to contain exactly five interactors and 45 non-interactors
 
 # `Non_ints` are all prey that are not interactors and have melting curves
-pdata_stand <- pdata %>%
+pdata3 <- pdata2 %>%
   mutate(Non_ints = map2(Prey, Interactors, ~ .x[!(.x %in% .y)])) %>%
   mutate(Non_ints = map(Non_ints, ~ .x[.x %in% mdata$Protein]))
 
-# Remove any pull-down assay that does not contain > 5 interactors and > 45 non-interactors
-pdata_stand <- pdata_stand %>%
+# Remove any pull-down assay that does not contain >= 5 interactors and >= 45 non-interactors
+pdata3 <- pdata3 %>%
   mutate(Num_ints = map_int(Interactors, length)) %>%
   mutate(Num_non_ints = map_int(Non_ints, length)) %>%
   filter(Num_ints >= 5 & Num_non_ints >= 45) %>%
@@ -285,21 +296,21 @@ pdata_stand <- pdata_stand %>%
 
 # Standardize each of the remaining pull-down assays.
 set.seed(28)
-pdata_stand <- pdata_stand %>%
+pdata3 <- pdata3 %>%
   mutate(Prey = map(Non_ints, ~ sample(.x, 45))) %>%
   mutate(Interactors = map(Interactors, ~ sample(.x, 5))) %>%
   mutate(Prey = map2(Interactors, Prey, ~ c(.x, .y))) %>%
   select(-Non_ints)
 
 # Apply IR-MC to each standardized pull-down assay
-pb <- progress_bar$new(total = nrow(pdata_stand))
-res_ir_mc_stand <- pdata_stand %>%
+pb <- progress_bar$new(total = nrow(pdata3))
+res_ir_mc_stand <- pdata3 %>%
   mutate(Rk = map2(Bait, Prey, ~ {pb$tick(); ir_mc(d = "Eucl", query = .x, docs = .y, mdata)})) %>%
   select(Bait, Interactors, Rk)
 
 # Apply IR-MC-ML to each pull-down assay
-pb <- progress_bar$new(total = nrow(pdata_stand))
-res_ir_mc_ml_stand <- pdata_stand %>%
+pb <- progress_bar$new(total = nrow(pdata3))
+res_ir_mc_ml_stand <- pdata3 %>%
   mutate(Rk = pmap(list(Bait, Prey, Known_ints), ~ {
     pb$tick();
     ir_mc_ml(query = ..1, docs = ..2, mdata, known_ints = ..3)
@@ -321,146 +332,3 @@ res_ir_mc_ml_stand <- res_ir_mc_ml_stand %>%
   mutate(Num_expts = map_int(Rk_interactors, ~ .x[1])) %>%
   mutate(Num_expts_all = map_int(Rk_interactors, ~ .x[5])) %>%
   select(-Rk_interactors)
-
-## Euclidean distance ##
-
-# Run IR-MC with Euclidean distance
-rk_eucl <- ir_mc("Eucl", pdata, mdata)
-
-# join interactors so that rankings can be evaluated
-rk_eucl <- rk_eucl %>% inner_join(pdata, by = "Bait") %>% select(-Prey)
-  
-# Evaluate each ranking by average precision
-pb <- progress_bar$new(total = nrow(rk_eucl))
-rk_eucl <- rk_eucl %>% mutate(Avg_prec = map2_dbl(Rk, Interactors, ~{pb$tick(); avg_prec(.x, .y)}))
-
-# Evaluate each ranking by improvement probability
-set.seed(28)
-pb <- progress_bar$new(total = nrow(rk_eucl))
-rk_eucl <- rk_eucl %>% mutate(Improv_prob = map2_dbl(Rk, Interactors, ~ {pb$tick(); improv_prob(.x, .y, 1000)}))
-
-## Pearson dissimilarity ##
-
-# Run IR-MC with Pearson dissimilarity
-rk_pear <- ir_mc("Pear", pdata, mdata)
-
-# join interactors so that rankings can be evaluated
-rk_pear <- rk_pear %>% inner_join(pdata, by = "Bait") %>% select(-Prey)
-
-# Evaluate each ranking by average precision
-pb <- progress_bar$new(total = nrow(rk_pear))
-rk_pear <- rk_pear %>% mutate(Avg_prec = map2_dbl(Rk, Interactors, ~{pb$tick(); avg_prec(.x, .y)}))
-
-# Evaluate each ranking by improvement probability
-set.seed(28)
-pb <- progress_bar$new(total = nrow(rk_pear))
-rk_pear <- rk_pear %>% mutate(IP = map2_dbl(Rk, Interactors, ~ {pb$tick(); improv_prob(.x, .y, 1000)}))
-
-## Random ranking ##
-set.seed(28)
-rk_rand <- ir_mc("Rand", pdata, mdata)
-
-# join interactors so that rankings can be evaluated
-rk_rand <- rk_rand %>% inner_join(pdata, by = "Bait") %>% select(-Prey)
-
-# Evaluate each ranking by average precision
-pb <- progress_bar$new(total = nrow(rk_rand))
-rk_rand <- rk_rand %>% mutate(Avg_prec = map2_dbl(Rk, Interactors, ~{pb$tick(); avg_prec(.x, .y)}))
-
-# Evaluate each ranking by improvement probability
-set.seed(28)
-pb <- progress_bar$new(total = nrow(rk_rand))
-rk_rand <- rk_rand %>% mutate(Improv_prob = map2_dbl(Rk, Interactors, ~ {pb$tick(); improv_prob(.x, .y, 1000)}))
-
-# paired t-tests
-t.test(rk_eucl$Avg_prec, rk_rand$Avg_prec, alternative = "two.sided", paired = T)
-t.test(rk_pear$Avg_prec, rk_rand$Avg_prec, alternative = "two.sided", paired = T)
-t.test(rk_eucl$Avg_prec, rk_pear$Avg_prec, alternative = "two.sided", paired = T)
-
-## Standardize the pull-down assays to each have 50 prey in total, exactly five of which are interactors.
-
-# `Non_ints` are all prey that are not interactors and have melting curves
-pdata1 <- pdata %>%
-  mutate(Non_ints = map2(Prey, Interactors, ~ .x[!(.x %in% .y)])) %>%
-  mutate(Non_ints = map(Non_ints, ~ .x[.x %in% mdata$Protein]))
-
-# Remove any pull-down assay that does not contain > 5 interactors and > 45 non-interactors
-pdata1 <- pdata1 %>%
-  mutate(Num_ints = map_int(Interactors, length)) %>%
-  mutate(Num_non_ints = map_int(Non_ints, length)) %>%
-  filter(Num_ints >= 5 & Num_non_ints >= 45) %>%
-  select(-Num_ints, -Num_non_ints)
-
-# Standardize each of the remaining pull-down assays.
-set.seed(28)
-pdata1 <- pdata1 %>%
-  mutate(Prey = map(Non_ints, ~ sample(.x, 45))) %>%
-  mutate(Interactors = map(Interactors, ~ sample(.x, 5))) %>%
-  mutate(Prey = map2(Interactors, Prey, ~ c(.x, .y))) %>%
-  select(-Non_ints)
-
-## Euclidean distance
-
-# Run IR-MC with Euclidean distance
-rk_eucl1 <- ir_mc("Eucl", pdata1, mdata)
-
-# join interactors so that rankings can be evaluated
-rk_eucl1 <- rk_eucl1 %>% inner_join(pdata1, by = "Bait") %>% select(-Prey)
-
-# Ranks of interactors
-rk_eucl1 <- rk_eucl1 %>% mutate(Rk_ints = map2(Rk, Interactors, ~ which(.x %in% .y)))
-
-## Random ranking
-
-# Run IR-MC with random distance
-set.seed(28)
-rk_rand1 <- ir_mc("Rand", pdata1, mdata)
-
-# join interactors so that rankings can be evaluated
-rk_rand1 <- rk_rand1 %>% inner_join(pdata1, by = "Bait") %>% select(-Prey)
-
-# Ranks of interactors
-rk_rand1 <- rk_rand1 %>% mutate(Rk_ints = map2(Rk, Interactors, ~ which(.x %in% .y)))
-
-## Plot number of experiments to find one and all five interactors for standardized pull-down assays.
-
-# Construct data frame
-df <- bind_rows(
-  tibble(
-    Category = 0L,
-    Num_expts = map_int(rk_eucl1$Rk_ints, ~ .x[1]),
-  ),
-  # tibble(
-  #   Category = 5L,
-  #   Num_expts = map_int(rk_rand1$Rk_ints, ~ .x[1]),
-  #   Color = "2"
-  # ),
-  tibble(
-    Category = 5,
-    Num_expts = map_int(rk_eucl1$Rk_ints, ~ .x[5])
-  )
-  # tibble(
-  #   Category = 15L,
-  #   Num_expts = map_int(rk_rand1$Rk_ints, ~ .x[5]),
-  #   Color = "2"
-  # )
-)
-
-ggplot(df, aes(y = Category, x = Num_expts)) +
-  geom_jitter(size = 8, alpha = .4, color = "#00BFC4") +
-  # geom_segment(aes(x = -2.2, y = 4.973333, xend = 2.2, yend = 4.973333), size = 3, color = "#336699", linetype = "dashed") +
-  # geom_segment(aes(x = 5-2.2, y = 8.4031, xend = 5+2.2, yend = 8.4031), size = 3, color = "#CC3300", linetype = "dashed") +
-  # # geom_point(aes(x = 10, y = 32.18476), size = 8, color = "#336699", shape = 23, fill = "#336699") +
-  # geom_segment(aes(x = 10-2.2, y = 32.18476, xend = 10+2.2, yend = 32.18476), size = 3, color = "#336699", linetype = "dashed") +
-  # geom_point(aes(x = 15, y = 42.51048), size = 8, color = "#CC3300", shape = 23, fill = "#CC3300") +
-  scale_y_reverse(breaks = c(0,5), labels = c(1, 5)) +
-  xlab("# of experiments") +
-  ylab("# of interactors") +
-  theme_bw() +
-  theme(
-    axis.text = element_text(size = 28, color = "black"),
-    axis.title = element_text(size = 32),
-    panel.grid.major.y = element_line(colour = "grey", size = 1),
-    legend.title = element_text(size = 28, color = "black"),
-    legend.text = element_text(size = 22, color = "black")
-  )
